@@ -34,9 +34,7 @@ out.println("Server Host Name :: "+inetAddress.getHostName());
 	
 <hr>
 <div style="text-align: center;">
-	<span>
-		<img src="images/mylandmarklogo.png" alt="" width="150">
-	</span>
+	
 	<span style="font-weight: bold;">
                 Landmark Technology, 
 		Toronto, Canada
@@ -53,5 +51,9 @@ out.println("Server Host Name :: "+inetAddress.getHostName());
 <p align=center> Landmark Technologies - Consultant, Training and Software Development</p>
 <p align=center><small>Copyrights 2021 by <a href="http://mylandmarktech.com/">Landmark Technologies</a> </small></p>
 
+<span>
+		<img src="images/mylandmarklogo.png" alt="" width="300"; "height=300" >
+
+</span>
 </body>
 </html>

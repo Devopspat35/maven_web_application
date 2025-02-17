@@ -1,0 +1,161 @@
+pipeline {
+    agent any
+
+    environment {
+        GIT_REPO = 'https://github.com/Devopspat35/Pipeline-Webapplication.git'
+        GIT_BRANCH = 'master'
+        DOCKER_IMAGE = 'devopspatem2021/twtwebapp_real'
+        DOCKER_HUB_CREDENTIALS = 'docker-hub-credentials'
+        AWS_CREDENTIALS = 'aws-credentials'
+        SONARQUBE_CREDENTIALS = 'sonarqube-token'
+        NEXUS_URL = 'http://nexus.yourcompany.com/repository/maven-releases/'
+        NEXUS_CREDENTIALS = 'nexus-credentials'
+        KUBECONFIG = '/home/jenkins/.kube/config'
+        S3_BUCKET = 'twtech-ci-cd-bucket'
+        DYNAMODB_TABLE = 'twtech-ci-cd-table'
+        MATRIX_SERVER_URL = 'https://matrix.yourcompany.com'
+        MATRIX_ROOM_ID = 'twtech-room-id'
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git branch: "${GIT_BRANCH}", url: "${GIT_REPO}"
+            }
+        }
+
+        stage('Security Scans') {
+            parallel {
+                stage('Dependency Check (OWASP)') {
+                    steps {
+                        sh 'mvn org.owasp:dependency-check-maven:check'
+                    }
+                }
+                stage('Trivy Scan') {
+                    steps {
+                        sh 'trivy fs . --exit-code 1 --severity HIGH,CRITICAL'
+                    }
+                }
+                stage('SonarQube Analysis') {
+                    steps {
+                        withCredentials([string(credentialsId: 'SONARQUBE_CREDENTIALS', variable: 'SONARQUBE_TOKEN')]) {
+                            sh 'mvn sonar:sonar -Dsonar.login=${SONARQUBE_TOKEN}'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Application') {
+            parallel {
+                stage('Build Java App') {
+                    steps {
+                        sh 'mvn clean package -DskipTests'
+                    }
+                }
+               
+                 /*
+                stage('Build Node.js App') {
+                    steps {
+                        sh 'npm install && npm run build'
+                    }
+                 */
+               
+                 stage(' Build webApp') {
+                    steps {
+                        sh 'mvn install && mvn package'
+                    }
+
+                }
+            }
+        }
+
+        stage('Push Artifacts to Nexus') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'NEXUS_CREDENTIALS', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+                    sh 'mvn deploy -DaltDeploymentRepository=nexus-releases::default::${NEXUS_URL}'
+                }
+            }
+        }
+
+        stage('Build & Push Docker Image') {
+            steps {
+                script {
+                    withDockerRegistry([credentialsId: 'DOCKER_HUB_CREDENTIALS', url: 'https://index.docker.io/v1/']) {
+                        sh "docker build -t ${DOCKER_IMAGE}:latest ."
+                        sh "docker push ${DOCKER_IMAGE}:latest"
+                    }
+                }
+            }
+        }
+
+        stage('Provision Infrastructure with Terraform') {
+            steps {
+                withCredentials([aws(credentialsId: 'AWS_CREDENTIALS')]) {
+                    sh """
+                    cd terraform/
+                    terraform init
+                    terraform apply -auto-approve
+                    """
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes (EKS)') {
+            steps {
+                sh "kubectl apply -f k8s/deployment.yaml"
+                sh "kubectl rollout status deployment/twtech-app"
+            }
+        }
+
+        stage('Configure Monitoring & Logging') {
+            parallel {
+                stage('Set Up CloudWatch Logs') {
+                    steps {
+                        sh "aws logs create-log-group --log-group-name /eks/twtech-app"
+                    }
+                }
+                stage('Deploy Filebeat') {
+                    steps {
+                        sh "kubectl apply -f monitoring/filebeat.yaml"
+                    }
+                }
+                stage('Deploy Elasticsearch & Kibana') {
+                    steps {
+                        sh "kubectl apply -f monitoring/elasticsearch.yaml"
+                        sh "kubectl apply -f monitoring/kibana.yaml"
+                    }
+                }
+                stage('Enable Container Insights') {
+                    steps {
+                        sh "aws eks update-cluster-config --region us-east-2 --name twtech-eks-cluster --logging 'ALL'"
+                    }
+                }
+            }
+        }
+
+        stage('Backup & Restore with Kasten K10') {
+            steps {
+                sh "kubectl apply -f backup/kasten-k10.yaml"
+            }
+        }
+
+        stage('Send Notification to Matrix Server') {
+            steps {
+                script {
+                    def message = "CI/CD Pipeline Completed Successfully! "
+                    sh "curl -X POST -d '{\"msgtype\": \"m.text\", \"body\": \"${message}\"}' ${MATRIX_SERVER_URL}/_matrix/client/r0/rooms/${MATRIX_ROOM_ID}/send/m.room.message?access_token=your-token"
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                def message = " CI/CD Pipeline Failed! Check Jenkins for logs."
+                sh "curl -X POST -d '{\"msgtype\": \"m.text\", \"body\": \"${message}\"}' ${MATRIX_SERVER_URL}/_matrix/client/r0/rooms/${MATRIX_ROOM_ID}/send/m.room.message?access_token=your-token"
+            }
+        }
+    }
+}
